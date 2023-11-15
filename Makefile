@@ -1,20 +1,49 @@
-DEFS = -DNS_ENABLE_SSL $(CFLAGS_EXTRA)
-CFLAGS = -W -Wall -O2 -pthread -lcrypto -lssl $(DEFS)
-SOURCES = ssl_wrapper.c net_skeleton.c
+.PHONY: all clean distclean
 
-ifeq ($(OS),Windows_NT)
- 	# Windows build. Assumes that Visual Studio is installed at $(VC)
-	VC = ../../vs98
-  OSSL = ../../openssl-0.9.8
-  EXE_SUFFIX = .exe
-	CC = $(VC)/bin/cl
-	CFLAGS = /MD /TC /nologo /W3 /I$(VC)/include /I$(OSSL)/include $(DEFS)
-	CFLAGS += /link /incremental:no /libpath:$(VC)/lib /machine:IX86 \
-		$(OSSL)/lib/ssleay32.lib $(OSSL)/lib/libeay32.lib
+SSL_WRAP  = ssl_wrapper
+EXEC_DIR  = /sbin/
+UNAME    := $(shell uname)
+
+CPPFLAGS ?= -D_LARGEFILE_SOURCE \
+            -D_LARGEFILE64_SOURCE \
+            -D_FILE_OFFSET_BITS=64
+
+CFLAGS   ?= -Wall \
+            -Winit-self \
+            -Wmissing-field-initializers \
+            -Wpointer-arith \
+            -Wredundant-decls \
+            -Wshadow \
+            -Wstack-protector \
+            -Wswitch-enum \
+            -Wundef \
+            -fdata-sections \
+            -ffunction-sections \
+            -fstack-protector-all \
+            -ftabstop=4 \
+            -g3 \
+            -pipe \
+            -std=c99
+
+LDFLAGS  ?= -lndm
+
+LDFLAGS  +=  -lcrypto -lssl
+
+CFLAGS   += -D_DEFAULT_SOURCE \
+            -DNS_ENABLE_SSL
+
+ifeq ($(UNAME),Linux)
+CFLAGS   += -D_POSIX_C_SOURCE=200809L \
+            -D_XOPEN_SOURCE=600 \
+            -D_SVID_SOURCE=1
 endif
 
-ssl_wrapper: $(SOURCES)
-	$(CC) -o $@$(EXE_SUFFIX) $(SOURCES) $(CFLAGS)
+all: $(SSL_WRAP)
+
+$(SSL_WRAP): ssl_wrapper.c Makefile
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< net_skeleton.c $(LDFLAGS) -o $@
 
 clean:
-	rm -rf ssl_wrapper ssl_wrapper.exe *.o *.obj *.dSYM
+	rm -fv *.o *~ $(SSL_WRAP)
+
+distclean: clean

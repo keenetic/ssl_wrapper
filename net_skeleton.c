@@ -38,8 +38,23 @@
  * Cipher suite options used for TLS negotiation.
  * We start with everything and disable some outdated ciphers and digests.
  */
-static const char ns_s_cipher_list[] =
-    "ALL:!EXPORT:!LOW:!MEDIUM:!ADH:!MD5";
+static const char* const ns_s_cipher_list =
+    "ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305" \
+    ":ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256" \
+    ":ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384" \
+    ":DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384" \
+    ":ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA" \
+    ":ECDHE-RSA-AES256-SHA384:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES256-SHA384" \
+    ":ECDHE-ECDSA-AES256-SHA:ECDHE-RSA-AES256-SHA:DHE-RSA-AES128-SHA256" \
+    ":DHE-RSA-AES128-SHA:DHE-RSA-AES256-SHA256:DHE-RSA-AES256-SHA" \
+    ":ECDHE-ECDSA-DES-CBC3-SHA:ECDHE-RSA-DES-CBC3-SHA:EDH-RSA-DES-CBC3-SHA" \
+    ":AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA256:AES256-SHA256" \
+    ":AES128-SHA:AES256-SHA:DES-CBC3-SHA" \
+    ":!aNULL:!eNULL:!EXPORT:!DES:!MD5:!PSK:!RC4:!DSS";
+
+static const char* const ns_s_cipher_list_tls13 =
+    "TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384";
+
 /*
  * Default DH params for PFS cipher negotiation. This is a 2048-bit group.
  * Will be used if none are provided by the user in the certificate file.
@@ -635,8 +650,9 @@ static int ns_ssl_err(struct ns_connection *conn, int res) {
 #endif
 
 static void ns_read_from_socket(struct ns_connection *conn) {
-  char buf[2048];
+  char buf[16 * 1024];
   int n = 0;
+  int left = sizeof(buf);
 
   if (conn->flags & NSF_CONNECTING) {
     int ok = 1, ret;
@@ -677,6 +693,12 @@ static void ns_read_from_socket(struct ns_connection *conn) {
         DBG(("%p %d <- %d bytes (SSL)", conn, conn->flags, n));
         iobuf_append(&conn->recv_iobuf, buf, n);
         ns_call(conn, NS_RECV, &n);
+        left -= n;
+
+        if (left <= 0) {
+            DBG(("%p enough (SSL)", conn));
+            break;
+        }
       }
       ns_ssl_err(conn, n);
     } else {
@@ -699,6 +721,13 @@ static void ns_read_from_socket(struct ns_connection *conn) {
       DBG(("%p %d <- %d bytes (PLAIN)", conn, conn->flags, n));
       iobuf_append(&conn->recv_iobuf, buf, n);
       ns_call(conn, NS_RECV, &n);
+
+      left -= n;
+
+      if (left <= 0) {
+          DBG(("%p enough (PLAIN)", conn));
+          break;
+      }
     }
   }
 
@@ -897,8 +926,7 @@ struct ns_connection *ns_connect(struct ns_mgr *mgr,
 #ifdef NS_ENABLE_SSL
   if (use_ssl) {
     if ((nc->ssl_ctx = SSL_CTX_new(SSLv23_client_method())) == NULL ||
-        ns_use_cert(nc->ssl_ctx, cert) != 0 ||
-        ns_use_ca_cert(nc->ssl_ctx, ca_cert) != 0 ||
+         SSL_CTX_set_mode(nc->ssl_ctx, SSL_MODE_RELEASE_BUFFERS) == -1 ||
         (nc->ssl = SSL_new(nc->ssl_ctx)) == NULL) {
       ns_close_conn(nc);
       return NULL;
@@ -908,7 +936,13 @@ struct ns_connection *ns_connect(struct ns_mgr *mgr,
        * disabled (at least on OpenSSL 1.0.1f 6 Jan 2014). Go figure. */
       SSL_CTX_set_options(nc->ssl_ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
       SSL_CTX_set_cipher_list(nc->ssl_ctx, ns_s_cipher_list);
+      SSL_CTX_set_ciphersuites(nc->ssl_ctx, ns_s_cipher_list_tls13);
       SSL_set_fd(nc->ssl, sock);
+
+      if (cert[0] != '\0') {
+          DBG(("%p use tlsext: '%s'", nc, cert));
+          SSL_set_tlsext_host_name(nc->ssl, cert);
+      }
     }
   }
 #endif

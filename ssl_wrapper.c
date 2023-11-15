@@ -19,6 +19,9 @@
 #include "net_skeleton.h"
 #include "ssl_wrapper.h"
 
+#include <pwd.h>
+#include <grp.h>
+
 static void ev_handler(struct ns_connection *nc, enum ns_event ev, void *p) {
   const char *target_addr = (const char *) nc->mgr->user_data;
   struct ns_connection *pc = (struct ns_connection *) nc->connection_data;
@@ -99,11 +102,51 @@ static void show_usage_and_exit(const char *prog) {
   exit(EXIT_FAILURE);
 }
 
+static int drop_privileges(const char *user)
+{
+    if (geteuid() == 0) {
+        struct group *grp;
+        struct passwd *pwd;
+
+        errno = 0;
+        pwd = getpwnam(user);
+
+        if (pwd == NULL) {
+            fprintf(stderr, "Unable to get UID for user \"%s\": %s",
+                user, strerror(errno));
+            return 0;
+        }
+
+        errno = 0;
+        grp = getgrnam(user);
+
+        if (grp == NULL) {
+            fprintf(stderr, "Unable to get GID for group \"%s\": %s",
+                user, strerror(errno));
+            return 0;
+        }
+
+        if (setgid(grp->gr_gid) == -1) {
+            fprintf(stderr, "Unable to set new group \"%s\": %s",
+                user, strerror(errno));
+            return 0;
+        }
+
+        if (setuid(pwd->pw_uid) == -1) {
+            fprintf(stderr, "Unable to set new user \"%s\": %s",
+                user, strerror(errno));
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
 int main(int argc, char *argv[]) {
   void *wrapper;
   const char *err_msg;
 
-  if (argc != 3) {
+  if (argc != 4) {
     show_usage_and_exit(argv[0]);
   }
 
@@ -118,6 +161,11 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Error: %s\n", err_msg);
     exit(EXIT_FAILURE);
   }
+
+  if (!drop_privileges(argv[3])) {
+      exit(EXIT_FAILURE);
+  }
+
   ssl_wrapper_serve(wrapper, &s_received_signal);
 
   return EXIT_SUCCESS;
